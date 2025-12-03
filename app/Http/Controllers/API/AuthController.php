@@ -83,9 +83,7 @@ class AuthController extends Controller
         ]);
     }
 
-    /**
-     * Logout user
-     */
+ 
     public function logout(Request $request)
     {
         $request->user()->token()->revoke();
@@ -96,7 +94,7 @@ class AuthController extends Controller
         ]);
     }
 
-  
+    
     public function user(Request $request)
     {
         return response()->json([

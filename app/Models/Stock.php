@@ -26,18 +26,24 @@ class Stock extends Model
         'last_updated_at' => 'datetime',
     ];
 
+
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class);
     }
 
-    
     public function orderProducts(): HasMany
     {
         return $this->hasMany(OrderProduct::class);
     }
 
-  
+ 
+    public function stockLogs(): HasMany
+    {
+        return $this->hasMany(StockLog::class);
+    }
+
+
     public function getProfitPercentageAttribute(): float
     {
         if ($this->purchase_price == 0) {
@@ -47,9 +53,12 @@ class Stock extends Model
         return (($this->sale_price - $this->purchase_price) / $this->purchase_price) * 100;
     }
 
- 
-    public function updateQuantity(int $quantity, bool $increment = true): void
+   
+    public function updateQuantity(int $quantity, bool $increment = true, ?string $logType = null, ?int $orderId = null, ?string $remarks = null): void
     {
+        $previousQuantity = $this->quantity;
+        $changeQuantity = $increment ? $quantity : -$quantity;
+        
         if ($increment) {
             $this->increment('quantity', $quantity);
         } else {
@@ -58,5 +67,23 @@ class Stock extends Model
         
         $this->last_updated_at = now();
         $this->save();
+        
+
+        if ($logType) {
+            StockLog::createLog($logType, $this, $changeQuantity, $orderId, $remarks);
+        }
+    }
+
+   
+    public static function getFIFOStock($productId = null)
+    {
+        $query = self::where('quantity', '>', 0)
+            ->orderBy('created_at', 'asc'); // FIFO: First In First Out
+        
+        if ($productId) {
+            $query->where('product_id', $productId);
+        }
+        
+        return $query->get();
     }
 }
