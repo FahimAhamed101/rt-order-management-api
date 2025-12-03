@@ -40,6 +40,11 @@ return [
             'driver' => 'session',
             'provider' => 'users',
         ],
+      
+      'api' => [
+        'driver' => 'passport', // Change from 'token' to 'passport'
+        'provider' => 'users',
+    ],
     ],
 
     /*
