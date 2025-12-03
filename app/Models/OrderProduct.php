@@ -14,55 +14,72 @@ class OrderProduct extends Model
         'order_id',
         'product_id',
         'stock_id',
+        'quantity',
         'sale_price',
+        'purchase_price', // Add this
         'sub_total',
-        'profit',
-        'quantity'
+        'profit'
     ];
 
     protected $casts = [
         'sale_price' => 'decimal:2',
+        'purchase_price' => 'decimal:2', // Add this
         'sub_total' => 'decimal:2',
         'profit' => 'decimal:2',
+        'quantity' => 'integer',
     ];
 
-  
+    /**
+     * Get the order that owns the order product.
+     */
     public function order(): BelongsTo
     {
         return $this->belongsTo(Order::class);
     }
 
-
+    /**
+     * Get the product that owns the order product.
+     */
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class);
     }
 
-
+    /**
+     * Get the stock that owns the order product.
+     */
     public function stock(): BelongsTo
     {
         return $this->belongsTo(Stock::class);
     }
 
+    /**
+     * Calculate profit based on purchase price and sale price
+     */
     public static function calculateProfit(float $salePrice, float $purchasePrice, int $quantity): float
     {
         $profitPerUnit = $salePrice - $purchasePrice;
         return $profitPerUnit * $quantity;
     }
 
-
-    public static function createWithProfit(array $data): self
+    /**
+     * Get profit percentage
+     */
+    public function getProfitPercentageAttribute(): float
     {
-        $stock = Stock::findOrFail($data['stock_id']);
+        if ($this->purchase_price == 0) {
+            return 0;
+        }
         
-        $data['sale_price'] = $stock->sale_price;
-        $data['sub_total'] = $stock->sale_price * $data['quantity'];
-        $data['profit'] = self::calculateProfit(
-            $stock->sale_price,
-            $stock->purchase_price,
-            $data['quantity']
-        );
+        $profitPerUnit = $this->sale_price - $this->purchase_price;
+        return ($profitPerUnit / $this->purchase_price) * 100;
+    }
 
-        return self::create($data);
+    /**
+     * Get profit per unit
+     */
+    public function getProfitPerUnitAttribute(): float
+    {
+        return $this->sale_price - $this->purchase_price;
     }
 }

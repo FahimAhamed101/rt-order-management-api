@@ -13,29 +13,29 @@ use Illuminate\Support\Facades\Validator;
 
 class OrderController extends Controller
 {
- 
+  
     public function index(Request $request)
     {
         try {
             $query = Order::with(['orderProducts.product', 'orderProducts.stock'])
                 ->orderBy('created_at', 'desc');
             
-      
+            
             if ($request->has('customer_name') && !empty($request->customer_name)) {
                 $query->where('customer_name', 'like', "%{$request->customer_name}%");
             }
             
-  
+        
             if ($request->has('invoice_number') && !empty($request->invoice_number)) {
                 $query->where('invoice_number', 'like', "%{$request->invoice_number}%");
             }
             
-        
+          
             if ($request->has('status') && !empty($request->status)) {
                 $query->where('status', $request->status);
             }
             
-     
+  
             if ($request->has('start_date') && !empty($request->start_date)) {
                 $query->whereDate('date_time', '>=', $request->start_date);
             }
@@ -44,16 +44,18 @@ class OrderController extends Controller
                 $query->whereDate('date_time', '<=', $request->end_date);
             }
             
-   
+    
             if ($request->has('search') && !empty($request->search)) {
                 $search = $request->search;
                 $query->where(function($q) use ($search) {
                     $q->where('invoice_number', 'like', "%{$search}%")
-                      ->orWhere('customer_name', 'like', "%{$search}%");
+                      ->orWhere('customer_name', 'like', "%{$search}%")
+                      ->orWhere('customer_phone', 'like', "%{$search}%")
+                      ->orWhere('customer_email', 'like', "%{$search}%");
                 });
             }
             
-   
+      
             $perPage = $request->get('per_page', 15);
             $orders = $query->paginate($perPage);
 
@@ -71,18 +73,18 @@ class OrderController extends Controller
         }
     }
 
-
+  
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
             'customer_name' => 'required|string|max:255',
             'customer_phone' => 'nullable|string|max:20',
-            'customer_email' => 'nullable|email',
+            'customer_email' => 'nullable|email|max:255',
             'customer_address' => 'nullable|string',
             'products' => 'required|array|min:1',
             'products.*.stock_id' => 'required|exists:stocks,id',
             'products.*.quantity' => 'required|integer|min:1',
-            'payment_method' => 'nullable|in:cash,card,online,bkash,nagad',
+            'payment_method' => 'nullable|in:cash,card,online,bkash,nagad,rocket',
             'payment_status' => 'nullable|in:pending,paid,partial',
             'paid_amount' => 'nullable|numeric|min:0',
             'discount' => 'nullable|numeric|min:0',
@@ -106,16 +108,16 @@ class OrderController extends Controller
             $totalProfit = 0;
             $orderProducts = [];
             
-  
+     
             foreach ($request->products as $productItem) {
                 $stock = Stock::with('product')->findOrFail($productItem['stock_id']);
                 
-          
+    
                 if ($stock->quantity < $productItem['quantity']) {
                     throw new \Exception("Insufficient stock for product: {$stock->product->name}. Available: {$stock->quantity}, Requested: {$productItem['quantity']}");
                 }
                 
-       
+           
                 $subTotal = $stock->sale_price * $productItem['quantity'];
                 $profit = ($stock->sale_price - $stock->purchase_price) * $productItem['quantity'];
                 
@@ -133,15 +135,17 @@ class OrderController extends Controller
                 ];
             }
             
-        
+     
             $discount = $request->discount ?? 0;
             $tax = $request->tax ?? 0;
             $shippingCharge = $request->shipping_charge ?? 0;
             
             $finalAmount = $totalAmount - $discount + $tax + $shippingCharge;
+            $paidAmount = $request->paid_amount ?? 0;
+            $dueAmount = max(0, $finalAmount - $paidAmount);
             
-       
-            $order = Order::create([
+     
+            $orderData = [
                 'customer_name' => $request->customer_name,
                 'customer_phone' => $request->customer_phone,
                 'customer_email' => $request->customer_email,
@@ -153,24 +157,26 @@ class OrderController extends Controller
                 'shipping_charge' => $shippingCharge,
                 'payment_method' => $request->payment_method ?? 'cash',
                 'payment_status' => $request->payment_status ?? 'pending',
-                'paid_amount' => $request->paid_amount ?? 0,
-                'due_amount' => $finalAmount - ($request->paid_amount ?? 0),
+                'paid_amount' => $paidAmount,
+                'due_amount' => $dueAmount,
                 'status' => 'Pending',
                 'date_time' => now(),
                 'notes' => $request->notes,
-            ]);
+            ];
             
- 
+            $order = Order::create($orderData);
+            
+          
             foreach ($orderProducts as $orderProductData) {
                 $orderProductData['order_id'] = $order->id;
                 
-           
+        
                 $orderProduct = OrderProduct::create($orderProductData);
                 
-          
+         
                 $stock = Stock::find($orderProductData['stock_id']);
                 if ($stock) {
-           
+         
                     StockLog::create([
                         'type' => 'order-create',
                         'stock_id' => $stock->id,
@@ -183,7 +189,7 @@ class OrderController extends Controller
                         'remarks' => 'Order creation - ' . $order->invoice_number,
                     ]);
                     
-          
+      
                     $stock->quantity -= $orderProductData['quantity'];
                     $stock->last_updated_at = now();
                     $stock->save();
@@ -208,17 +214,26 @@ class OrderController extends Controller
         }
     }
 
- 
+   
     public function show($id)
     {
         try {
             $order = Order::with(['orderProducts.product', 'orderProducts.stock'])
                 ->findOrFail($id);
 
+ 
+            $totalProfit = $order->orderProducts->sum('profit');
+            $totalProducts = $order->orderProducts->sum('quantity');
+
+            $orderData = $order->toArray();
+            $orderData['total_profit'] = $totalProfit;
+            $orderData['total_products'] = $totalProducts;
+            $orderData['profit_percentage'] = $order->sub_total > 0 ? ($totalProfit / $order->sub_total) * 100 : 0;
+
             return response()->json([
                 'success' => true,
                 'message' => 'Order retrieved successfully',
-                'data' => $order
+                'data' => $orderData
             ]);
         } catch (\Exception $e) {
             return response()->json([
@@ -229,12 +244,12 @@ class OrderController extends Controller
         }
     }
 
-
+ 
     public function update(Request $request, $id)
     {
         $order = Order::with('orderProducts')->findOrFail($id);
         
-       
+  
         if ($order->status !== 'Pending') {
             return response()->json([
                 'success' => false,
@@ -245,12 +260,12 @@ class OrderController extends Controller
         $validator = Validator::make($request->all(), [
             'customer_name' => 'sometimes|required|string|max:255',
             'customer_phone' => 'nullable|string|max:20',
-            'customer_email' => 'nullable|email',
+            'customer_email' => 'nullable|email|max:255',
             'customer_address' => 'nullable|string',
             'products' => 'sometimes|required|array|min:1',
             'products.*.stock_id' => 'required|exists:stocks,id',
             'products.*.quantity' => 'required|integer|min:1',
-            'payment_method' => 'nullable|in:cash,card,online,bkash,nagad',
+            'payment_method' => 'nullable|in:cash,card,online,bkash,nagad,rocket',
             'payment_status' => 'nullable|in:pending,paid,partial',
             'paid_amount' => 'nullable|numeric|min:0',
             'discount' => 'nullable|numeric|min:0',
@@ -274,7 +289,7 @@ class OrderController extends Controller
             foreach ($order->orderProducts as $oldOrderProduct) {
                 $stock = Stock::find($oldOrderProduct->stock_id);
                 if ($stock) {
-                   
+       
                     StockLog::create([
                         'type' => 'order-update',
                         'stock_id' => $stock->id,
@@ -287,17 +302,17 @@ class OrderController extends Controller
                         'remarks' => 'Order update - Restoring stock from old order',
                     ]);
                     
-               
+            
                     $stock->quantity += $oldOrderProduct->quantity;
                     $stock->last_updated_at = now();
                     $stock->save();
                 }
             }
             
-         
+       
             $order->orderProducts()->delete();
             
-       
+     
             $totalAmount = 0;
             $totalProfit = 0;
             $orderProducts = [];
@@ -311,7 +326,7 @@ class OrderController extends Controller
                         throw new \Exception("Insufficient stock for product: {$stock->product->name}. Available: {$stock->quantity}, Requested: {$productItem['quantity']}");
                     }
                     
-              
+                 
                     $subTotal = $stock->sale_price * $productItem['quantity'];
                     $profit = ($stock->sale_price - $stock->purchase_price) * $productItem['quantity'];
                     
@@ -329,14 +344,14 @@ class OrderController extends Controller
                     ];
                 }
                 
-             
+     
                 $discount = $request->discount ?? $order->discount;
                 $tax = $request->tax ?? $order->tax;
                 $shippingCharge = $request->shipping_charge ?? $order->shipping_charge;
                 
                 $finalAmount = $totalAmount - $discount + $tax + $shippingCharge;
                 
-              
+      
                 $order->update([
                     'total_amount' => $finalAmount,
                     'sub_total' => $totalAmount,
@@ -346,7 +361,7 @@ class OrderController extends Controller
                 ]);
             }
             
-         
+       
             $updateData = [];
             if ($request->has('customer_name')) $updateData['customer_name'] = $request->customer_name;
             if ($request->has('customer_phone')) $updateData['customer_phone'] = $request->customer_phone;
@@ -354,27 +369,37 @@ class OrderController extends Controller
             if ($request->has('customer_address')) $updateData['customer_address'] = $request->customer_address;
             if ($request->has('payment_method')) $updateData['payment_method'] = $request->payment_method;
             if ($request->has('payment_status')) $updateData['payment_status'] = $request->payment_status;
-            if ($request->has('paid_amount')) {
-                $updateData['paid_amount'] = $request->paid_amount;
-                $updateData['due_amount'] = $order->total_amount - $request->paid_amount;
-            }
             if ($request->has('notes')) $updateData['notes'] = $request->notes;
+            
+            if ($request->has('paid_amount')) {
+                $paidAmount = $request->paid_amount;
+                $currentTotal = $request->has('products') ? $finalAmount : $order->total_amount;
+                
+                if ($paidAmount > $currentTotal) {
+                    throw new \Exception("Paid amount cannot be greater than total amount");
+                }
+                
+                $updateData['paid_amount'] = $paidAmount;
+                $updateData['due_amount'] = $currentTotal - $paidAmount;
+                $updateData['payment_status'] = $paidAmount == $currentTotal ? 'paid' : ($paidAmount > 0 ? 'partial' : 'pending');
+            }
             
             if (!empty($updateData)) {
                 $order->update($updateData);
             }
             
-        
+       
             if ($request->has('products')) {
                 foreach ($orderProducts as $orderProductData) {
                     $orderProductData['order_id'] = $order->id;
-                
+                    
+         
                     $orderProduct = OrderProduct::create($orderProductData);
                     
-              
+                
                     $stock = Stock::find($orderProductData['stock_id']);
                     if ($stock) {
-                    
+                     
                         StockLog::create([
                             'type' => 'order-update',
                             'stock_id' => $stock->id,
@@ -387,7 +412,7 @@ class OrderController extends Controller
                             'remarks' => 'Order update - Adding new products',
                         ]);
                         
-                  
+                     
                         $stock->quantity -= $orderProductData['quantity'];
                         $stock->last_updated_at = now();
                         $stock->save();
@@ -413,7 +438,7 @@ class OrderController extends Controller
         }
     }
 
- 
+  
     public function destroy($id)
     {
         DB::beginTransaction();
@@ -433,7 +458,7 @@ class OrderController extends Controller
             foreach ($order->orderProducts as $orderProduct) {
                 $stock = Stock::find($orderProduct->stock_id);
                 if ($stock) {
-                
+                  
                     StockLog::create([
                         'type' => 'order-delete',
                         'stock_id' => $stock->id,
@@ -446,17 +471,17 @@ class OrderController extends Controller
                         'remarks' => 'Order deletion - Restoring stock',
                     ]);
                     
-              
+                
                     $stock->quantity += $orderProduct->quantity;
                     $stock->last_updated_at = now();
                     $stock->save();
                 }
             }
             
-        
+         
             $order->orderProducts()->delete();
             
-       
+         
             $order->delete();
             
             DB::commit();
@@ -476,11 +501,11 @@ class OrderController extends Controller
         }
     }
 
-    
+
     public function fakePayment(Request $request, $id)
     {
         $validator = Validator::make($request->all(), [
-            'payment_method' => 'required|in:cash,card,online,bkash,nagad',
+            'payment_method' => 'required|in:cash,card,online,bkash,nagad,rocket',
             'paid_amount' => 'required|numeric|min:0',
         ]);
 
@@ -506,11 +531,12 @@ class OrderController extends Controller
             }
             
             $paymentStatus = $paidAmount == $totalAmount ? 'paid' : 'partial';
+            $dueAmount = $totalAmount - $paidAmount;
             
             $order->update([
                 'payment_method' => $request->payment_method,
                 'paid_amount' => $paidAmount,
-                'due_amount' => $totalAmount - $paidAmount,
+                'due_amount' => $dueAmount,
                 'payment_status' => $paymentStatus,
                 'payment_date' => now(),
             ]);
@@ -522,7 +548,7 @@ class OrderController extends Controller
                     'invoice_number' => $order->invoice_number,
                     'total_amount' => $totalAmount,
                     'paid_amount' => $paidAmount,
-                    'due_amount' => $totalAmount - $paidAmount,
+                    'due_amount' => $dueAmount,
                     'payment_status' => $paymentStatus,
                     'payment_method' => $request->payment_method,
                 ]
@@ -536,7 +562,7 @@ class OrderController extends Controller
         }
     }
 
-
+ 
     public function getByInvoice($invoiceNumber)
     {
         try {
@@ -558,7 +584,7 @@ class OrderController extends Controller
         }
     }
 
-
+ 
     public function updateStatus(Request $request, $id)
     {
         $validator = Validator::make($request->all(), [
@@ -580,12 +606,12 @@ class OrderController extends Controller
             $oldStatus = $order->status;
             $newStatus = $request->status;
             
-
+        
             if ($newStatus === 'Cancelled' && $oldStatus !== 'Cancelled') {
                 foreach ($order->orderProducts as $orderProduct) {
                     $stock = Stock::find($orderProduct->stock_id);
                     if ($stock) {
-                   
+                    
                         StockLog::create([
                             'type' => 'order-update',
                             'stock_id' => $stock->id,
@@ -598,7 +624,7 @@ class OrderController extends Controller
                             'remarks' => 'Order cancelled - Restoring stock',
                         ]);
                         
-              
+                 
                         $stock->quantity += $orderProduct->quantity;
                         $stock->last_updated_at = now();
                         $stock->save();
@@ -606,7 +632,7 @@ class OrderController extends Controller
                 }
             }
             
-     
+       
             if ($oldStatus === 'Cancelled' && $newStatus !== 'Cancelled') {
                 foreach ($order->orderProducts as $orderProduct) {
                     $stock = Stock::find($orderProduct->stock_id);
@@ -615,7 +641,7 @@ class OrderController extends Controller
                             throw new \Exception("Insufficient stock to uncancel order for product: {$stock->product->name}");
                         }
                         
-                    
+              
                         StockLog::create([
                             'type' => 'order-update',
                             'stock_id' => $stock->id,
@@ -628,7 +654,7 @@ class OrderController extends Controller
                             'remarks' => 'Order uncancelled - Deducting stock',
                         ]);
                         
-                 
+                    
                         $stock->quantity -= $orderProduct->quantity;
                         $stock->last_updated_at = now();
                         $stock->save();
@@ -651,6 +677,110 @@ class OrderController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to update order status',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    
+  
+    public function getStatistics(Request $request)
+    {
+        try {
+         
+            $startDate = $request->get('start_date', now()->subMonth());
+            $endDate = $request->get('end_date', now());
+            
+     
+            $totalOrders = Order::whereBetween('date_time', [$startDate, $endDate])->count();
+            
+       
+            $totalRevenue = Order::whereBetween('date_time', [$startDate, $endDate])
+                ->where('status', '!=', 'Cancelled')
+                ->sum('total_amount');
+            
+       
+            $totalProfit = OrderProduct::whereHas('order', function($query) use ($startDate, $endDate) {
+                    $query->whereBetween('date_time', [$startDate, $endDate])
+                          ->where('status', '!=', 'Cancelled');
+                })
+                ->sum('profit');
+            
+      
+            $ordersByStatus = Order::select('status', DB::raw('count(*) as count'))
+                ->whereBetween('date_time', [$startDate, $endDate])
+                ->groupBy('status')
+                ->get()
+                ->pluck('count', 'status');
+            
+     
+            $topProducts = OrderProduct::select('product_id', 
+                    DB::raw('SUM(quantity) as total_quantity'),
+                    DB::raw('SUM(sub_total) as total_sales'),
+                    DB::raw('SUM(profit) as total_profit')
+                )
+                ->whereHas('order', function($query) use ($startDate, $endDate) {
+                    $query->whereBetween('date_time', [$startDate, $endDate])
+                          ->where('status', '!=', 'Cancelled');
+                })
+                ->with('product')
+                ->groupBy('product_id')
+                ->orderBy('total_quantity', 'desc')
+                ->limit(10)
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Order statistics retrieved',
+                'data' => [
+                    'total_orders' => $totalOrders,
+                    'total_revenue' => (float) $totalRevenue,
+                    'total_profit' => (float) $totalProfit,
+                    'average_order_value' => $totalOrders > 0 ? $totalRevenue / $totalOrders : 0,
+                    'orders_by_status' => $ordersByStatus,
+                    'top_products' => $topProducts,
+                    'date_range' => [
+                        'start_date' => $startDate,
+                        'end_date' => $endDate,
+                    ]
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to retrieve order statistics',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+
+    public function getDailySales(Request $request)
+    {
+        try {
+            $days = $request->get('days', 30);
+            
+            $dailySales = Order::select(
+                    DB::raw('DATE(date_time) as date'),
+                    DB::raw('COUNT(*) as total_orders'),
+                    DB::raw('SUM(total_amount) as total_sales'),
+                    DB::raw('SUM(CASE WHEN status = "Delivered" THEN total_amount ELSE 0 END) as delivered_sales')
+                )
+                ->where('date_time', '>=', now()->subDays($days))
+                ->where('status', '!=', 'Cancelled')
+                ->groupBy(DB::raw('DATE(date_time)'))
+                ->orderBy('date', 'desc')
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Daily sales report retrieved',
+                'data' => $dailySales
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to retrieve daily sales report',
                 'error' => $e->getMessage()
             ], 500);
         }
