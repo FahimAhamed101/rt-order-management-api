@@ -12,7 +12,16 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        // Define Route Middleware Aliases here
+        $middleware->alias([
+            'jwt.verify' => \App\Http\Middleware\JwtMiddleware::class,
+            'jwt.auth' => \Tymon\JWTAuth\Http\Middleware\GetUserFromToken::class,
+            'jwt.refresh' => \Tymon\JWTAuth\Http\Middleware\RefreshToken::class,
+        ]);
+        
+        // If you were defining global middleware (applied to all requests), 
+        // you would use $middleware->web() or $middleware->api() here.
+
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //

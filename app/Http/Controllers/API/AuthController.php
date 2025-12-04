@@ -8,10 +8,18 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
-use Laravel\Passport\Passport;
+use Tymon\JWTAuth\Facades\JWTAuth;
 
 class AuthController extends Controller
 {
+    /**
+     * Create a new AuthController instance.
+     */
+    public function __construct()
+    {
+        $this->middleware('auth:api', ['except' => ['login', 'register']]);
+    }
+
     /**
      * Register a new user
      */
@@ -20,7 +28,7 @@ class AuthController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
-            'password' => 'required|string|min:8|confirmed',
+            'password' => 'required|string|min:6|confirmed',
         ]);
 
         if ($validator->fails()) {
@@ -36,19 +44,20 @@ class AuthController extends Controller
             'password' => Hash::make($request->password),
         ]);
 
-        $token = $user->createToken('authToken')->accessToken;
+        $token = JWTAuth::fromUser($user);
 
         return response()->json([
             'success' => true,
             'message' => 'User registered successfully',
             'user' => $user,
             'token' => $token,
-            'token_type' => 'Bearer',
+            'token_type' => 'bearer',
+            'expires_in' => config('jwt.ttl') * 60
         ], 201);
     }
 
     /**
-     * Login user
+     * Get a JWT via given credentials.
      */
     public function login(Request $request)
     {
@@ -64,42 +73,62 @@ class AuthController extends Controller
             ], 422);
         }
 
-        if (!Auth::attempt($request->only('email', 'password'))) {
+        $credentials = $request->only('email', 'password');
+
+        if (!$token = JWTAuth::attempt($credentials)) {
             return response()->json([
                 'success' => false,
                 'message' => 'Invalid credentials'
             ], 401);
         }
 
-        $user = Auth::user();
-        $token = $user->createToken('authToken')->accessToken;
+        return $this->respondWithToken($token);
+    }
 
+    /**
+     * Get the authenticated User.
+     */
+    public function user(Request $request)
+    {
         return response()->json([
             'success' => true,
-            'message' => 'Login successful',
-            'user' => $user,
-            'token' => $token,
-            'token_type' => 'Bearer',
+            'user' => auth()->user()
         ]);
     }
 
- 
-    public function logout(Request $request)
+    /**
+     * Log the user out (Invalidate the token).
+     */
+    public function logout()
     {
-        $request->user()->token()->revoke();
-        
+        auth()->logout();
+
         return response()->json([
             'success' => true,
             'message' => 'Successfully logged out'
         ]);
     }
 
-    
-    public function user(Request $request)
+    /**
+     * Refresh a token.
+     */
+    public function refresh()
+    {
+        return $this->respondWithToken(auth()->refresh());
+    }
+
+    /**
+     * Get the token array structure.
+     */
+    protected function respondWithToken($token)
     {
         return response()->json([
             'success' => true,
-            'user' => $request->user()
+            'message' => 'Login successful',
+            'access_token' => $token,
+            'token_type' => 'bearer',
+            'expires_in' => config('jwt.ttl') * 60,
+            'user' => auth()->user()
         ]);
     }
 }
