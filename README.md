@@ -14,8 +14,12 @@ DB_USERNAME=root
 DB_PASSWORD=
 
 
-then run php artisan db:seed
+then run 
+
+php artisan db:seed
 
 for seeding the database
 
-then run php artisan serve
+then run 
+
+php artisan serve
