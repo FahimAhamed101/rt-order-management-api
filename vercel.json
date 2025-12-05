@@ -26,7 +26,8 @@
             "src": "/(.*)",
             "dest": "/api/index.php"
         
-        }
+        },
+          
     ],
     "env": {
         "APP_NAME": "Laravel Vercel",
